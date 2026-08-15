@@ -754,8 +754,8 @@ with tab1:
 <div class="winner">
     <h3>🏆 Overall Winner: {winner_name}</h3>
     <p>
-        Logistic Regression is selected as the overall winner because it
-        achieved the highest AUC, Recall, F1 Score and MCC in the final
+        <b>{winner_name}</b> is selected as the overall winner based on
+        the highest Matthews Correlation Coefficient (MCC) in the final
         common test-set experiment. Its MCC is <b>{winner_mcc:.4f}</b>.
     </p>
 </div>
