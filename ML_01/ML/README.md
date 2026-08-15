@@ -11,7 +11,7 @@ Diabetes is one of the most prevalent chronic diseases worldwide. Early detectio
 - **Class Imbalance Note**: The dataset is heavily imbalanced, with ~86% of respondents classified as non-diabetic. This makes standard accuracy misleading, so we emphasize metrics like the Matthews Correlation Coefficient (MCC), Area Under the Curve (AUC), and Recall.
 
 ## c. GitHub Repository Link
-[Add your GitHub Repository URL here]
+[https://github.com/sqlenthusiastmaaz/diabetes-risk-intelligence](https://github.com/sqlenthusiastmaaz/diabetes-risk-intelligence)
 
 ## d. Models Used
 Below is the performance comparison of the 5 models evaluated on the 20% held-out test set:
