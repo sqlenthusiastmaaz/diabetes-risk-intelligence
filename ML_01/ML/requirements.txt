@@ -6,3 +6,4 @@ joblib==1.4.2
 streamlit==1.37.1
 matplotlib == 3.9.2
 seaborn == 0.13.2
+kagglehub==1.0.1

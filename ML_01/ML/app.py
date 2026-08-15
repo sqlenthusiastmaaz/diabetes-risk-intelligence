@@ -464,6 +464,12 @@ X_raw = X_raw[expected_features]
 
 try:
     X_proc = preprocessor.transform(X_raw)
+    if hasattr(preprocessor, "get_feature_names_out"):
+        X_proc = pd.DataFrame(
+        X_proc,
+        columns=expected_features,
+        index=X_raw.index
+    )
 except Exception as exc:
     st.error(
         f"Preprocessing error: {exc}. "
