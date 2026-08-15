@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import joblib
 import matplotlib.pyplot as plt
 import matplotlib
@@ -12,6 +11,11 @@ from sklearn.metrics import (
     accuracy_score, roc_auc_score, precision_score, recall_score, f1_score,
     matthews_corrcoef, confusion_matrix, classification_report, roc_curve
 )
+
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_DIR = BASE_DIR / "model"
 
 # ═══════════════════════════ Page Configuration ═══════════════════════════
 st.set_page_config(
@@ -208,7 +212,7 @@ def load_data(file) -> pd.DataFrame:
 def load_metrics_csv() -> pd.DataFrame:
     """Load the pre-computed metrics comparison table."""
     try:
-        return pd.read_csv("model/metrics_comparison.csv")
+        return pd.read_csv(MODEL_DIR / "metrics_comparison.csv")
     except Exception:
         return pd.DataFrame()
 
@@ -217,7 +221,7 @@ def load_metrics_csv() -> pd.DataFrame:
 def load_model(name: str):
     """Load a pickled model from the model/ directory."""
     try:
-        return joblib.load(os.path.join("model", MODEL_FILES[name]))
+        return joblib.load(MODEL_DIR / MODEL_FILES[name])
     except Exception as e:
         st.error(f"Error loading model '{name}': {e}")
         return None
@@ -227,7 +231,7 @@ def load_model(name: str):
 def load_preprocessor():
     """Load the saved StandardScaler preprocessor."""
     try:
-        return joblib.load("model/preprocessor.pkl")
+        return joblib.load(MODEL_DIR / "preprocessor.pkl")
     except Exception as e:
         st.error(f"Error loading preprocessor: {e}")
         return None
@@ -252,8 +256,8 @@ with st.sidebar:
     if uploaded is not None:
         df = load_data(uploaded)
         st.success("Custom data loaded")
-    elif os.path.exists("test_data.csv"):
-        df = load_data("test_data.csv")
+    elif (BASE_DIR / "test_data.csv").exists():
+        df = load_data(BASE_DIR / "test_data.csv")
         st.info("Using bundled test_data.csv")
     else:
         st.error("No data available. Upload a CSV.")
@@ -359,14 +363,14 @@ plt.rcParams.update({
 
 # ═══════════════════════════ Hero Banner ═══════════════════════════
 def get_base64_image(image_path):
-    if os.path.exists(image_path):
+    if image_path.exists():
         with open(image_path, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode()
     return ""
 
-logo_b64 = get_base64_image("logo.png")
+logo_b64 = get_base64_image(BASE_DIR / "logo.png")
 if not logo_b64:
-    logo_b64 = get_base64_image("logo.jpg")
+    logo_b64 = get_base64_image(BASE_DIR / "logo.jpg")
     img_type = "jpeg"
 else:
     img_type = "png"
