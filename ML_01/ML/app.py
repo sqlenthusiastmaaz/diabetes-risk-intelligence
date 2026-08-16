@@ -362,8 +362,8 @@ with st.sidebar:
         type=["csv"],
         help=(
             "Upload a CSV with the same raw feature schema as the "
-            "training data. The Diabetes_binary target column is required "
-            "for evaluation."
+            "training data. Diabetes_binary is optional: include it only "
+            "if you want evaluation metrics."
         ),
     )
 
@@ -417,11 +417,9 @@ with st.sidebar:
 if df.empty:
     st.stop()
 
-if TARGET_COL not in df.columns:
-    st.error(
-        f"Dataset must contain the target column: `{TARGET_COL}`"
-    )
-    st.stop()
+# The target is optional for prediction-only uploads.
+# If it is present, the app also calculates evaluation metrics.
+has_target = TARGET_COL in df.columns
 
 model = load_model(selected)
 preprocessor = load_preprocessor()
@@ -438,8 +436,12 @@ if model is None or preprocessor is None:
 # PREDICTION
 # ============================================================
 
-X_raw = df.drop(columns=[TARGET_COL])
-y_true = df[TARGET_COL]
+if has_target:
+    X_raw = df.drop(columns=[TARGET_COL])
+    y_true = df[TARGET_COL]
+else:
+    X_raw = df.copy()
+    y_true = None
 
 # Validate the feature schema against the fitted preprocessor.
 try:
@@ -464,12 +466,6 @@ X_raw = X_raw[expected_features]
 
 try:
     X_proc = preprocessor.transform(X_raw)
-    if hasattr(preprocessor, "get_feature_names_out"):
-        X_proc = pd.DataFrame(
-        X_proc,
-        columns=expected_features,
-        index=X_raw.index
-    )
 except Exception as exc:
     st.error(
         f"Preprocessing error: {exc}. "
@@ -480,7 +476,9 @@ except Exception as exc:
 try:
     y_pred = model.predict(X_proc)
 
-    if hasattr(model, "predict_proba"):
+    probability_available = hasattr(model, "predict_proba")
+
+    if probability_available:
         y_prob = model.predict_proba(X_proc)[:, 1]
     elif hasattr(model, "decision_function"):
         y_prob = model.decision_function(X_proc)
@@ -491,40 +489,62 @@ except Exception as exc:
     st.error(f"Prediction error: {exc}")
     st.stop()
 
+# Attach predictions to the currently loaded dataset.
+prediction_results = df.copy()
+prediction_results["Predicted_Diabetes"] = y_pred
+
+if probability_available:
+    prediction_results["Risk_Probability"] = y_prob
+    prediction_results["Risk_Level"] = np.where(
+        y_prob >= 0.5,
+        "Higher Risk",
+        "Lower Risk",
+    )
+else:
+    prediction_results["Prediction_Score"] = y_prob
+    prediction_results["Risk_Level"] = np.where(
+        y_pred == 1,
+        "Higher Risk",
+        "Lower Risk",
+    )
+
 
 # ============================================================
 # CURRENT DATASET METRICS
 # ============================================================
 
-acc = accuracy_score(y_true, y_pred)
+if has_target:
+    acc = accuracy_score(y_true, y_pred)
 
-if y_true.nunique() == 2:
-    auc = roc_auc_score(y_true, y_prob)
+    if y_true.nunique() == 2:
+        auc = roc_auc_score(y_true, y_prob)
+    else:
+        auc = np.nan
+
+    prec = precision_score(
+        y_true,
+        y_pred,
+        zero_division=0,
+    )
+
+    rec = recall_score(
+        y_true,
+        y_pred,
+        zero_division=0,
+    )
+
+    f1 = f1_score(
+        y_true,
+        y_pred,
+        zero_division=0,
+    )
+
+    mcc = matthews_corrcoef(
+        y_true,
+        y_pred,
+    )
 else:
-    auc = np.nan
-
-prec = precision_score(
-    y_true,
-    y_pred,
-    zero_division=0,
-)
-
-rec = recall_score(
-    y_true,
-    y_pred,
-    zero_division=0,
-)
-
-f1 = f1_score(
-    y_true,
-    y_pred,
-    zero_division=0,
-)
-
-mcc = matthews_corrcoef(
-    y_true,
-    y_pred,
-)
+    acc = auc = prec = rec = f1 = mcc = np.nan
 
 metrics = {
     "Accuracy": acc,
@@ -534,7 +554,6 @@ metrics = {
     "F1 Score": f1,
     "Matthews Correlation Coefficient": mcc,
 }
-
 
 # ============================================================
 # CHART THEME
@@ -614,6 +633,17 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if has_target:
+    st.success(
+        "Evaluation mode: uploaded data includes `Diabetes_binary`, "
+        "so predictions and performance metrics are available."
+    )
+else:
+    st.info(
+        "Prediction-only mode: uploaded data does not include `Diabetes_binary`. "
+        "Predictions will be generated, but evaluation metrics cannot be calculated."
+    )
+
 
 # ============================================================
 # TABS
@@ -634,105 +664,156 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
 
     # --------------------------------------------------------
-    # Gauge charts
+    # Evaluation metrics OR prediction summary
     # --------------------------------------------------------
 
-    GAUGE_COLORS = {
-        "Accuracy": "#4DA3D9",
-        "Area Under the Curve": "#4DA3D9",
-        "Precision": "#4DA3D9",
-        "Recall": "#4DA3D9",
-        "F1 Score": "#4DA3D9",
-        "Matthews Correlation Coefficient": "#4DA3D9",
-    }
+    if has_target:
+        GAUGE_COLORS = {
+            "Accuracy": "#4DA3D9",
+            "Area Under the Curve": "#4DA3D9",
+            "Precision": "#4DA3D9",
+            "Recall": "#4DA3D9",
+            "F1 Score": "#4DA3D9",
+            "Matthews Correlation Coefficient": "#4DA3D9",
+        }
 
-    def make_gauge_svg(value, size=120):
-        if pd.isna(value):
-            display_value = "N/A"
-            pct = 0
-        else:
-            display_value = f"{value:.3f}"
-            pct = max(0, min(1, value))
+        def make_gauge_svg(value, size=120):
+            display_value = f"{value:.3f}" if not pd.isna(value) else "N/A"
+            pct = 0 if pd.isna(value) else max(0, min(1, value))
 
-        r = 48
-        cx = size // 2
-        cy = size // 2
-        circumference = 2 * np.pi * r
-        filled = circumference * pct
-        gap = circumference - filled
+            r = 48
+            cx = size // 2
+            cy = size // 2
+            circumference = 2 * np.pi * r
+            filled = circumference * pct
+            gap = circumference - filled
 
-        return f"""
+            return f"""
 <svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">
-    <circle
-        cx="{cx}" cy="{cy}" r="{r}"
-        fill="none"
-        stroke="rgba(128,128,128,0.15)"
-        stroke-width="8"
-    />
-    <circle
-        cx="{cx}" cy="{cy}" r="{r}"
-        fill="none"
-        stroke="#4DA3D9"
-        stroke-width="8"
+    <circle cx="{cx}" cy="{cy}" r="{r}" fill="none"
+        stroke="rgba(128,128,128,0.15)" stroke-width="8"/>
+    <circle cx="{cx}" cy="{cy}" r="{r}" fill="none"
+        stroke="#4DA3D9" stroke-width="8"
         stroke-dasharray="{filled:.1f} {gap:.1f}"
         stroke-dashoffset="{circumference * 0.25:.1f}"
-        stroke-linecap="round"
-    />
-    <text
-        x="{cx}" y="{cy + 1}"
-        text-anchor="middle"
-        dominant-baseline="central"
-        fill="currentColor"
-        font-size="18"
-        font-weight="700"
-        font-family="Arial, sans-serif"
-    >
+        stroke-linecap="round"/>
+    <text x="{cx}" y="{cy + 1}" text-anchor="middle"
+        dominant-baseline="central" fill="currentColor"
+        font-size="18" font-weight="700" font-family="Arial, sans-serif">
         {display_value}
     </text>
 </svg>
 """
 
-    cards_html = '<div class="m-grid">'
+        cards_html = '<div class="m-grid">'
 
-    for name, val in metrics.items():
-        svg = make_gauge_svg(val)
+        for name, val in metrics.items():
+            cards_html += (
+                '<div class="m-card">'
+                f'<div class="gauge-wrap">{make_gauge_svg(val)}</div>'
+                f'<div class="lbl">{name}</div>'
+                '</div>'
+            )
 
-        cards_html += (
-            '<div class="m-card">'
-            f'<div class="gauge-wrap">{svg}</div>'
-            f'<div class="lbl">{name}</div>'
-            '</div>'
+        cards_html += "</div>"
+
+        st.markdown(
+            cards_html,
+            unsafe_allow_html=True,
         )
 
-    cards_html += "</div>"
+        # Model-specific interpretation applies to the official experiment.
+        obs = MODEL_OBS.get(selected, "")
 
-    st.markdown(
-        cards_html,
-        unsafe_allow_html=True,
-    )
-
-    # --------------------------------------------------------
-    # Model observation
-    # --------------------------------------------------------
-
-    obs = MODEL_OBS.get(selected, "")
-
-    if obs:
-        insight_html = f"""
+        if obs:
+            insight_html = f"""
 <div class="insight">
     <h4>{selected} — Key Insight</h4>
     <p>{obs}</p>
 </div>
 """
+            st.markdown(
+                insight_html,
+                unsafe_allow_html=True,
+            )
+
+        st.info(
+            "The metrics above are calculated on the currently loaded dataset. "
+            "Accuracy alone is not sufficient because the target is imbalanced; "
+            "Recall, F1 Score, MCC and AUC should be considered together."
+        )
+
+    else:
+        # --------------------------------------------------------
+        # Prediction-only mode
+        # --------------------------------------------------------
+        # Do NOT show six N/A evaluation gauges. Without the true target,
+        # evaluation metrics are mathematically unavailable. Instead show
+        # useful prediction information.
+        predicted_positive = int(np.sum(y_pred == 1))
+        predicted_negative = int(np.sum(y_pred == 0))
 
         st.markdown(
-            insight_html,
+            '<div class="sec-hdr">CUSTOM DATA PREDICTION</div>',
             unsafe_allow_html=True,
         )
 
+        p1, p2, p3 = st.columns(3)
+
+        p1.metric(
+            "Total Predictions",
+            f"{len(y_pred):,}",
+        )
+
+        p2.metric(
+            "Higher Risk",
+            f"{predicted_positive:,}",
+        )
+
+        p3.metric(
+            "Lower Risk",
+            f"{predicted_negative:,}",
+        )
+
+        st.info(
+            "This uploaded CSV does not contain `Diabetes_binary`, so the "
+            "model can generate predictions and risk probabilities, but "
+            "performance metrics cannot be calculated. Add `Diabetes_binary` "
+            "only when you want to evaluate predictions against known outcomes."
+        )
+
+        st.subheader("Prediction Summary")
+
+        summary_df = pd.DataFrame(
+            {
+                "Prediction": [
+                    "Higher Risk (1)",
+                    "Lower Risk (0)",
+                ],
+                "Count": [
+                    predicted_positive,
+                    predicted_negative,
+                ],
+                "Percentage": [
+                    predicted_positive / len(y_pred) * 100,
+                    predicted_negative / len(y_pred) * 100,
+                ],
+            }
+        )
+
+        st.dataframe(
+            summary_df.style.format(
+                {"Percentage": "{:.1f}%"}
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     # --------------------------------------------------------
-    # Overall winner
+    # Official experiment winner
     # --------------------------------------------------------
+    # This is deliberately separate from the uploaded-data prediction.
+    # It describes the fixed 50K -> 40K/10K experiment.
 
     comp = load_metrics_csv()
 
@@ -758,11 +839,12 @@ with tab1:
 
             winner_html = f"""
 <div class="winner">
-    <h3>🏆 Overall Winner: {winner_name}</h3>
+    <h3>🏆 Official Experiment Winner: {winner_name}</h3>
     <p>
-        <b>{winner_name}</b> is selected as the overall winner based on
-        the highest Matthews Correlation Coefficient (MCC) in the final
-        common test-set experiment. Its MCC is <b>{winner_mcc:.4f}</b>.
+        {winner_name} was selected as the overall winner in the final
+        common test-set experiment based on the strongest overall balance
+        of AUC, Recall, F1 Score and MCC. Its MCC is
+        <b>{winner_mcc:.4f}</b>.
     </p>
 </div>
 """
@@ -771,13 +853,6 @@ with tab1:
                 winner_html,
                 unsafe_allow_html=True,
             )
-
-    st.info(
-        "Accuracy alone is not sufficient because the target is imbalanced. "
-        "Recall, F1 Score, MCC and AUC are considered together when comparing models."
-    )
-
-    st.divider()
 
     # --------------------------------------------------------
     # Official comparison table
@@ -902,159 +977,174 @@ with tab1:
 
 with tab2:
 
-    st.markdown(
-        f'<div class="sec-hdr">{selected} — Detailed Analysis</div>',
-        unsafe_allow_html=True,
-    )
-
-    col_cm, col_roc = st.columns(2)
-
-    # --------------------------------------------------------
-    # Confusion Matrix
-    # --------------------------------------------------------
-
-    with col_cm:
-
-        st.subheader("Prediction Accuracy")
-
-        cm = confusion_matrix(
-            y_true,
-            y_pred,
-            labels=[0, 1],
+    if not has_target:
+        st.markdown(
+            '<div class="sec-hdr">Prediction Results</div>',
+            unsafe_allow_html=True,
+        )
+        st.info(
+            "This upload does not contain `Diabetes_binary`, so confusion matrix, "
+            "ROC/AUC, precision, recall, F1 and MCC cannot be calculated. "
+            "The model has still generated predictions for every uploaded row."
         )
 
-        fig, ax = plt.subplots(
-            figsize=(5, 4)
+        p1, p2, p3 = st.columns(3)
+        predicted_positive = int(np.sum(y_pred == 1))
+        predicted_negative = int(np.sum(y_pred == 0))
+
+        p1.metric("Total Predictions", f"{len(y_pred):,}")
+        p2.metric("Higher Risk", f"{predicted_positive:,}")
+        p3.metric("Lower Risk", f"{predicted_negative:,}")
+
+        st.subheader("Prediction Results")
+        st.dataframe(
+            prediction_results.head(100),
+            use_container_width=True,
+            hide_index=True,
         )
 
-        sns.heatmap(
-            cm,
-            annot=True,
-            fmt="d",
-            cmap="PuBuGn",
-            ax=ax,
-            cbar=False,
-            annot_kws={
-                "size": 16,
-                "weight": "bold",
-            },
-            linewidths=2,
-            linecolor="white",
-            xticklabels=[
-                "No Diabetes",
-                "Diabetes",
-            ],
-            yticklabels=[
-                "No Diabetes",
-                "Diabetes",
-            ],
+    else:
+        st.markdown(
+            f'<div class="sec-hdr">{selected} — Detailed Analysis</div>',
+            unsafe_allow_html=True,
         )
 
-        ax.set_xlabel("Predicted Label")
-        ax.set_ylabel("True Label")
-        ax.set_title("Prediction Accuracy")
+        col_cm, col_roc = st.columns(2)
 
-        plt.tight_layout()
+        # --------------------------------------------------------
+        # Confusion Matrix
+        # --------------------------------------------------------
+        with col_cm:
+            st.subheader("Prediction Accuracy")
 
-        st.pyplot(fig)
-
-        plt.close(fig)
-
-    # --------------------------------------------------------
-    # ROC
-    # --------------------------------------------------------
-
-    with col_roc:
-
-        st.subheader("ROC Performance")
-
-        if not pd.isna(auc):
-
-            fpr, tpr, _ = roc_curve(
+            cm = confusion_matrix(
                 y_true,
-                y_prob,
+                y_pred,
+                labels=[0, 1],
             )
 
             fig, ax = plt.subplots(
                 figsize=(5, 4)
             )
 
-            ax.fill_between(
-                fpr,
-                tpr,
-                alpha=0.12,
-                color=CHART_COLORS["purple"],
+            sns.heatmap(
+                cm,
+                annot=True,
+                fmt="d",
+                cmap="PuBuGn",
+                ax=ax,
+                cbar=False,
+                annot_kws={
+                    "size": 16,
+                    "weight": "bold",
+                },
+                linewidths=2,
+                linecolor="white",
+                xticklabels=[
+                    "No Diabetes",
+                    "Diabetes",
+                ],
+                yticklabels=[
+                    "No Diabetes",
+                    "Diabetes",
+                ],
             )
 
-            ax.plot(
-                fpr,
-                tpr,
-                color=CHART_COLORS["purple"],
-                lw=2.5,
-                label=f"{selected} (AUC = {auc:.3f})",
-            )
-
-            ax.plot(
-                [0, 1],
-                [0, 1],
-                "k--",
-                lw=1,
-                alpha=0.4,
-                label="Random Baseline",
-            )
-
-            ax.set_xlim([0, 1])
-            ax.set_ylim([0, 1.05])
-            ax.set_xlabel("False Positive Rate")
-            ax.set_ylabel("True Positive Rate")
-            ax.set_title("ROC Performance")
-
-            ax.legend(
-                loc="lower right",
-                frameon=True,
-            )
+            ax.set_xlabel("Predicted Label")
+            ax.set_ylabel("True Label")
+            ax.set_title("Prediction Accuracy")
 
             plt.tight_layout()
-
             st.pyplot(fig)
-
             plt.close(fig)
 
-        else:
-            st.warning(
-                "ROC/AUC cannot be calculated because the loaded "
-                "test data contains only one class."
-            )
+        # --------------------------------------------------------
+        # ROC
+        # --------------------------------------------------------
+        with col_roc:
+            st.subheader("ROC Performance")
 
-    st.divider()
+            if not pd.isna(auc):
+                fpr, tpr, _ = roc_curve(
+                    y_true,
+                    y_prob,
+                )
 
-    # --------------------------------------------------------
-    # Classification Report
-    # --------------------------------------------------------
+                fig, ax = plt.subplots(
+                    figsize=(5, 4)
+                )
 
-    st.subheader("Classification Report")
+                ax.fill_between(
+                    fpr,
+                    tpr,
+                    alpha=0.12,
+                    color=CHART_COLORS["purple"],
+                )
 
-    report_dict = classification_report(
-        y_true,
-        y_pred,
-        labels=[0, 1],
-        target_names=[
-            "No Diabetes",
-            "Diabetes",
-        ],
-        output_dict=True,
-        zero_division=0,
-    )
+                ax.plot(
+                    fpr,
+                    tpr,
+                    color=CHART_COLORS["purple"],
+                    lw=2.5,
+                    label=f"{selected} (AUC = {auc:.3f})",
+                )
 
-    report_df = pd.DataFrame(
-        report_dict
-    ).transpose()
+                ax.plot(
+                    [0, 1],
+                    [0, 1],
+                    "k--",
+                    lw=1,
+                    alpha=0.4,
+                    label="Random Baseline",
+                )
 
-    st.dataframe(
-        report_df.style.format("{:.3f}"),
-        use_container_width=True,
-    )
+                ax.set_xlim([0, 1])
+                ax.set_ylim([0, 1.05])
+                ax.set_xlabel("False Positive Rate")
+                ax.set_ylabel("True Positive Rate")
+                ax.set_title("ROC Performance")
 
+                ax.legend(
+                    loc="lower right",
+                    frameon=True,
+                )
+
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close(fig)
+            else:
+                st.warning(
+                    "ROC/AUC cannot be calculated because the loaded "
+                    "test data contains only one class."
+                )
+
+        st.divider()
+
+        # --------------------------------------------------------
+        # Classification Report
+        # --------------------------------------------------------
+        st.subheader("Classification Report")
+
+        report_dict = classification_report(
+            y_true,
+            y_pred,
+            labels=[0, 1],
+            target_names=[
+                "No Diabetes",
+                "Diabetes",
+            ],
+            output_dict=True,
+            zero_division=0,
+        )
+
+        report_df = pd.DataFrame(
+            report_dict
+        ).transpose()
+
+        st.dataframe(
+            report_df.style.format("{:.3f}"),
+            use_container_width=True,
+        )
 
 # ============================================================
 # TAB 3 — DATA EXPLORER
@@ -1063,7 +1153,7 @@ with tab2:
 with tab3:
 
     st.markdown(
-        '<div class="sec-hdr">Dataset Overview</div>',
+        '<div class="sec-hdr">Dataset & Prediction Explorer</div>',
         unsafe_allow_html=True,
     )
 
@@ -1074,42 +1164,66 @@ with tab3:
         f"{len(df):,}",
     )
 
+    feature_count = len(expected_features)
     c2.metric(
         "Features",
-        f"{df.shape[1] - 1}",
+        f"{feature_count:,}",
     )
+
+    predicted_positive = int(np.sum(y_pred == 1))
+    predicted_negative = int(np.sum(y_pred == 0))
 
     c3.metric(
-        "Positive Class",
-        f"{int(y_true.sum()):,}",
+        "Predicted Higher Risk",
+        f"{predicted_positive:,}",
     )
 
-    positive_count = int(y_true.sum())
-
-    if positive_count > 0:
-        ratio = (
-            len(df) - positive_count
-        ) / positive_count
-
-        c4.metric(
-            "Negative : Positive",
-            f"{ratio:.1f} : 1",
-        )
-    else:
-        c4.metric(
-            "Negative : Positive",
-            "N/A",
-        )
+    c4.metric(
+        "Predicted Lower Risk",
+        f"{predicted_negative:,}",
+    )
 
     st.divider()
 
-    col_data, col_dist = st.columns(
-        [3, 2]
+    # --------------------------------------------------------
+    # Prediction Results
+    # --------------------------------------------------------
+    st.subheader("Prediction Results")
+
+    if has_target:
+        st.caption(
+            "The uploaded dataset contains the true `Diabetes_binary` target, "
+            "so predictions and evaluation metrics are both available."
+        )
+    else:
+        st.caption(
+            "Prediction-only mode: `Diabetes_binary` was not provided. "
+            "Predicted class and risk score are still generated for every row."
+        )
+
+    st.dataframe(
+        prediction_results.head(100),
+        use_container_width=True,
+        hide_index=True,
     )
 
-    with col_data:
+    csv_bytes = prediction_results.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="Download Predictions CSV",
+        data=csv_bytes,
+        file_name="diabetes_predictions.csv",
+        mime="text/csv",
+    )
 
-        st.subheader("Data Preview")
+    st.divider()
+
+    # --------------------------------------------------------
+    # Original Data Preview + Target Distribution
+    # --------------------------------------------------------
+    col_data, col_dist = st.columns([3, 2])
+
+    with col_data:
+        st.subheader("Original Data Preview")
 
         st.dataframe(
             df.head(15),
@@ -1118,79 +1232,129 @@ with tab3:
         )
 
     with col_dist:
+        if has_target:
+            st.subheader("Actual Target Distribution")
 
-        st.subheader("Target Distribution")
-
-        counts = (
-            df[TARGET_COL]
-            .value_counts()
-            .reindex(
-                [0, 1],
-                fill_value=0,
-            )
-        )
-
-        fig, ax = plt.subplots(
-            figsize=(5, 4)
-        )
-
-        colors = [
-            CHART_COLORS["primary"],
-            CHART_COLORS["accent"],
-        ]
-
-        bars = ax.bar(
-            [
-                "No Diabetes (0)",
-                "Diabetes (1)",
-            ],
-            counts.values,
-            color=colors,
-            width=0.5,
-            edgecolor="white",
-            linewidth=2,
-            zorder=3,
-        )
-
-        for bar, count in zip(
-            bars,
-            counts.values,
-        ):
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height()
-                + max(counts.values) * 0.02,
-                f"{count:,}",
-                ha="center",
-                fontweight="bold",
-                fontsize=11,
+            counts = (
+                df[TARGET_COL]
+                .value_counts()
+                .reindex(
+                    [0, 1],
+                    fill_value=0,
+                )
             )
 
-        ax.set_ylabel("Count")
-        ax.set_title("Class Distribution")
-        ax.grid(
-            axis="y",
-            alpha=0.3,
-            zorder=0,
-        )
+            fig, ax = plt.subplots(
+                figsize=(5, 4)
+            )
 
-        plt.tight_layout()
+            colors = [
+                CHART_COLORS["primary"],
+                CHART_COLORS["accent"],
+            ]
 
-        st.pyplot(fig)
+            bars = ax.bar(
+                [
+                    "No Diabetes (0)",
+                    "Diabetes (1)",
+                ],
+                counts.values,
+                color=colors,
+                width=0.5,
+                edgecolor="white",
+                linewidth=2,
+                zorder=3,
+            )
 
-        plt.close(fig)
+            for bar, count in zip(
+                bars,
+                counts.values,
+            ):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + max(counts.values) * 0.02,
+                    f"{count:,}",
+                    ha="center",
+                    fontweight="bold",
+                    fontsize=11,
+                )
+
+            ax.set_ylabel("Count")
+            ax.set_title("Actual Class Distribution")
+            ax.grid(
+                axis="y",
+                alpha=0.3,
+                zorder=0,
+            )
+
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+        else:
+            st.subheader("Predicted Class Distribution")
+
+            pred_counts = (
+                pd.Series(y_pred)
+                .value_counts()
+                .reindex([0, 1], fill_value=0)
+            )
+
+            fig, ax = plt.subplots(
+                figsize=(5, 4)
+            )
+
+            colors = [
+                CHART_COLORS["primary"],
+                CHART_COLORS["accent"],
+            ]
+
+            bars = ax.bar(
+                [
+                    "Lower Risk (0)",
+                    "Higher Risk (1)",
+                ],
+                pred_counts.values,
+                color=colors,
+                width=0.5,
+                edgecolor="white",
+                linewidth=2,
+                zorder=3,
+            )
+
+            for bar, count in zip(
+                bars,
+                pred_counts.values,
+            ):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + max(pred_counts.values) * 0.02,
+                    f"{count:,}",
+                    ha="center",
+                    fontweight="bold",
+                    fontsize=11,
+                )
+
+            ax.set_ylabel("Count")
+            ax.set_title("Predicted Class Distribution")
+            ax.grid(
+                axis="y",
+                alpha=0.3,
+                zorder=0,
+            )
+
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
 
     st.divider()
 
     st.subheader("Feature Statistics")
-
     st.dataframe(
         df.describe().T.style.format(
             "{:.2f}"
         ),
         use_container_width=True,
     )
-
 
 # ============================================================
 # TAB 4 — RISK FACTORS
